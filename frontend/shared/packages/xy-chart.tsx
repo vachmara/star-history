@@ -96,7 +96,8 @@ const getDarkThemeDefaultOptions = (transparent: boolean): XYChartOptions => {
 const XYChart = (
     svg: SVGSVGElement,
     { title, xLabel, yLabel, data: { datasets }, showDots, theme, transparent }: XYChartConfig,
-    initialOptions: Partial<XYChartOptions>
+    initialOptions: Partial<XYChartOptions>,
+    animationTime?: number
 ) => {
     const options: XYChartOptions = {
         ...(theme === "dark" ? getDarkThemeDefaultOptions(transparent) : getDefaultOptions(transparent)),
@@ -113,8 +114,38 @@ const XYChart = (
         margin.left = 70
     }
 
+    const interpolateData = (points: XYPoint[]): XYPoint[] => {
+        if (animationTime === undefined) return points
+
+        const result: XYPoint[] = []
+        for (let i = 0; i < points.length; i++) {
+            const current = points[i]
+            const currentTime = typeof current.x === "number" ? current.x : new Date(current.x).getTime()
+            if (currentTime < animationTime) {
+                result.push(current)
+            } else {
+                if (i === 0) {
+                    result.push({ ...current, x: typeof current.x === "number" ? animationTime : new Date(animationTime) })
+                } else {
+                    const prev = points[i - 1]
+                    const prevTime = typeof prev.x === "number" ? prev.x : new Date(prev.x).getTime()
+                    const ratio = (animationTime - prevTime) / (currentTime - prevTime)
+                    const y = prev.y + (current.y - prev.y) * ratio
+                    const xVal = typeof prev.x === "number" ? prev.x + (currentTime - prevTime) * ratio : new Date(prevTime + (currentTime - prevTime) * ratio)
+                    result.push(prev)
+                    result.push({ x: xVal as any, y })
+                }
+                break
+            }
+        }
+        return result
+    }
+
     const data = {
-        datasets
+        datasets: datasets.map((ds) => ({
+            ...ds,
+            data: interpolateData(ds.data)
+        }))
     }
 
     const filter = "url(#xkcdify)"

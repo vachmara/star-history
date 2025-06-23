@@ -8,8 +8,9 @@ interface Props {
     chartMode?: string
     timeFormat?: string
     id?: string
+    animationTime?: number
 }
-const StarXYChart: React.FC<Props> = ({ classname = "", data, chartMode = "Date" }) => {
+const StarXYChart: React.FC<Props> = ({ classname = "", data, chartMode = "Date", animationTime }) => {
     const chartContainerElRef = useRef<HTMLDivElement | null>(null)
     const svgElRef = useRef<SVGSVGElement | null>(null)
 
@@ -33,11 +34,12 @@ const StarXYChart: React.FC<Props> = ({ classname = "", data, chartMode = "Date"
                     {
                         xTickLabelType: chartMode === "Date" ? "Date" : "Number",
                         envType: "browser"
-                    }
+                    },
+                    animationTime
                 )
             }
         },
-        [chartMode]
+        [chartMode, animationTime]
     )
 
     useEffect(() => {
@@ -56,7 +58,7 @@ const StarXYChart: React.FC<Props> = ({ classname = "", data, chartMode = "Date"
                 chartContainerElRef.current.parentElement.style.height = `${chartContainerElRef.current.clientHeight * scaleRate + 16}px`
             }
         }
-    }, [data, drawStarChart])
+    }, [data, drawStarChart, animationTime])
 
     const handleSVGElementClick = () => {
         // Maybe we can capture the clicked svg element to expand chart functions.

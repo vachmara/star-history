@@ -13,6 +13,7 @@ import { ChartMode, RepoData } from "shared/types/chart"
 import BytebaseBanner from "./SponsorView"
 import utils from "shared/common/utils"
 import api from "shared/common/api"
+import { Canvg } from "canvg"
 
 interface State {
     chartMode: "Date" | "Timeline"
@@ -32,6 +33,9 @@ interface State {
     showGenEmbedCodeDialog: boolean
     showEmbedCodeDialog: boolean
     showEmbedChartGuideDialog: boolean
+    animationTime: number
+    animationPlaying: boolean
+    animationResolution: "Daily" | "Weekly" | "Monthly" | "Yearly"
 }
 
 function StarChartViewer() {
@@ -45,10 +49,53 @@ function StarChartViewer() {
         showEmbedCodeDialog: false,
         showSetTokenDialog: false,
         showGenEmbedCodeDialog: false,
-        showEmbedChartGuideDialog: false
+        showEmbedChartGuideDialog: false,
+        animationTime: 0,
+        animationPlaying: false,
+        animationResolution: "Daily"
     })
 
     const containerElRef = useRef<HTMLDivElement>(null)
+
+    const chartBounds = React.useMemo(() => {
+        if (!state.chartData) return { start: 0, end: 0 }
+        const all = state.chartData.datasets.flatMap((d) =>
+            d.data.map((p) => (typeof p.x === "number" ? p.x : new Date(p.x).getTime()))
+        )
+        return { start: Math.min(...all), end: Math.max(...all) }
+    }, [state.chartData])
+
+    const getStepDurationMs = React.useCallback(
+        (res: string) => {
+            switch (res) {
+                case "Weekly":
+                    return 7 * 24 * 60 * 60 * 1000
+                case "Monthly":
+                    return 30 * 24 * 60 * 60 * 1000
+                case "Yearly":
+                    return 365 * 24 * 60 * 60 * 1000
+                default:
+                    return 24 * 60 * 60 * 1000
+            }
+        },
+        []
+    )
+
+    useEffect(() => {
+        if (!state.animationPlaying) return
+        if (chartBounds.start === chartBounds.end) return
+        const step = getStepDurationMs(state.animationResolution) / 30
+        const id = setInterval(() => {
+            setState((prev) => {
+                const next = prev.animationTime + step
+                if (next > chartBounds.end) {
+                    return { ...prev, animationPlaying: false }
+                }
+                return { ...prev, animationTime: next }
+            })
+        }, 1000 / 30)
+        return () => clearInterval(id)
+    }, [state.animationPlaying, chartBounds, state.animationResolution, getStepDurationMs])
 
     const fetchReposData = React.useCallback(
         async (repos: string[], chartMode?: ChartMode) => {
@@ -99,7 +146,8 @@ function StarChartViewer() {
             } else {
                 setState((prevState) => ({
                     ...prevState,
-                    chartData: convertDataToChartData(repoData, chartMode ?? state.chartMode)
+                    chartData: convertDataToChartData(repoData, chartMode ?? state.chartMode),
+                    animationTime: 0
                 }))
             }
         },
@@ -285,6 +333,63 @@ function StarChartViewer() {
         }
     }
 
+    const handlePlayAnimation = () => {
+        if (state.chartData) {
+            setState((prev) => ({ ...prev, animationPlaying: true, animationTime: chartBounds.start }))
+        }
+    }
+
+    const handlePauseAnimation = () => {
+        setState((prev) => ({ ...prev, animationPlaying: false }))
+    }
+
+    const handleExportVideo = async () => {
+        if (!state.chartData) {
+            toast.error("No chart data available to export")
+            return
+        }
+        const svgElement = containerElRef.current?.querySelector("svg") as SVGSVGElement | null
+        if (!svgElement) {
+            toast.error("Chart element not found")
+            return
+        }
+        const { width, height } = svgElement.getBoundingClientRect()
+        const canvas = document.createElement("canvas")
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext("2d")
+        if (!ctx) {
+            toast.error("Failed to get canvas context")
+            return
+        }
+        const stream = canvas.captureStream(30)
+        const recorder = new MediaRecorder(stream, { mimeType: "video/webm" })
+        const chunks: Blob[] = []
+        recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) chunks.push(e.data)
+        }
+        recorder.start()
+        const step = getStepDurationMs(state.animationResolution) / 30
+        for (let t = chartBounds.start; t <= chartBounds.end; t += step) {
+            setState((prev) => ({ ...prev, animationTime: t }))
+            await new Promise((r) => setTimeout(r, 1000 / 30))
+            const svgString = new XMLSerializer().serializeToString(svgElement)
+            const v = await Canvg.fromString(ctx, svgString)
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            await v.render()
+        }
+        recorder.stop()
+        const videoBlob: Blob = await new Promise((resolve) => {
+            recorder.onstop = () => resolve(new Blob(chunks, { type: "video/webm" }))
+        })
+        const url = URL.createObjectURL(videoBlob)
+        const link = document.createElement("a")
+        link.href = url
+        link.download = `star-history-${utils.getDateString(Date.now(), "yyyyMMdd")}.webm`
+        link.click()
+        URL.revokeObjectURL(url)
+    }
+
     const handleGenEmbedCodeDialogBtnClick = () => {
         setState((prevState) => ({ ...prevState, showEmbedCodeDialog: true }))
     }
@@ -326,7 +431,7 @@ function StarChartViewer() {
                         </div>
                     </div>
                 )}
-                <div id="capture">{state.chartData && state.chartData.datasets.length > 0 && <StarXYChart classname="w-full h-auto mt-4" data={state.chartData} chartMode={state.chartMode} />}</div>
+                <div id="capture">{state.chartData && state.chartData.datasets.length > 0 && <StarXYChart classname="w-full h-auto mt-4" data={state.chartData} chartMode={state.chartMode} animationTime={state.animationTime} />}</div>
                 {/* ... rest of the JSX here */}
                 {state.showSetTokenDialog && (
                     <TokenSettingDialog
@@ -353,17 +458,38 @@ function StarChartViewer() {
                                 </a>
                             </div>
                             <div className="flex flex-row flex-wrap justify-end items-center mb-2">
-                                <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handleGenerateImageBtnClick}>
-                                    <i className="fas fa-download"></i> Image
-                                </button>
+                            <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handleGenerateImageBtnClick}>
+                                <i className="fas fa-download"></i> Image
+                            </button>
 
-                                <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handleGenerateCSVBtnClick}>
-                                    <i className="fas fa-download"></i> CSV
-                                </button>
+                            <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handleGenerateCSVBtnClick}>
+                                <i className="fas fa-download"></i> CSV
+                            </button>
 
-                                <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handleGenEmbedCodeDialogBtnClick}>
-                                    <i className="fas fa-code"></i> Embed
-                                </button>
+                            <select
+                                className="ml-2 mb-2 rounded leading-9 text-sm px-2 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200"
+                                value={state.animationResolution}
+                                onChange={(e) => setState((p) => ({ ...p, animationResolution: e.target.value as any }))}
+                            >
+                                <option value="Daily">Daily</option>
+                                <option value="Weekly">Weekly</option>
+                                <option value="Monthly">Monthly</option>
+                                <option value="Yearly">Yearly</option>
+                            </select>
+
+                            <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handlePlayAnimation}>
+                                <i className="fas fa-play"></i> Play
+                            </button>
+                            <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handlePauseAnimation}>
+                                <i className="fas fa-pause"></i> Pause
+                            </button>
+                            <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handleExportVideo}>
+                                <i className="fas fa-video"></i> Video
+                            </button>
+
+                            <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handleGenEmbedCodeDialogBtnClick}>
+                                <i className="fas fa-code"></i> Embed
+                            </button>
                                 <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handleCopyLinkBtnClick}>
                                     <i className="far fa-copy"></i> Link{" "}
                                 </button>
