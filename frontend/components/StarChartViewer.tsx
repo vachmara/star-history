@@ -33,8 +33,9 @@ interface State {
     showGenEmbedCodeDialog: boolean
     showEmbedCodeDialog: boolean
     showEmbedChartGuideDialog: boolean
-    animationStep: number
+    animationTime: number
     animationPlaying: boolean
+    animationResolution: "Daily" | "Weekly" | "Monthly" | "Yearly"
 }
 
 function StarChartViewer() {
@@ -49,31 +50,52 @@ function StarChartViewer() {
         showSetTokenDialog: false,
         showGenEmbedCodeDialog: false,
         showEmbedChartGuideDialog: false,
-        animationStep: 0,
-        animationPlaying: false
+        animationTime: 0,
+        animationPlaying: false,
+        animationResolution: "Daily"
     })
 
     const containerElRef = useRef<HTMLDivElement>(null)
 
-    const maxDataPoints = React.useMemo(() => {
-        if (!state.chartData) return 0
-        return Math.max(...state.chartData.datasets.map((d) => d.data.length))
+    const chartBounds = React.useMemo(() => {
+        if (!state.chartData) return { start: 0, end: 0 }
+        const all = state.chartData.datasets.flatMap((d) =>
+            d.data.map((p) => (typeof p.x === "number" ? p.x : new Date(p.x).getTime()))
+        )
+        return { start: Math.min(...all), end: Math.max(...all) }
     }, [state.chartData])
+
+    const getStepDurationMs = React.useCallback(
+        (res: string) => {
+            switch (res) {
+                case "Weekly":
+                    return 7 * 24 * 60 * 60 * 1000
+                case "Monthly":
+                    return 30 * 24 * 60 * 60 * 1000
+                case "Yearly":
+                    return 365 * 24 * 60 * 60 * 1000
+                default:
+                    return 24 * 60 * 60 * 1000
+            }
+        },
+        []
+    )
 
     useEffect(() => {
         if (!state.animationPlaying) return
-        if (maxDataPoints === 0) return
+        if (chartBounds.start === chartBounds.end) return
+        const step = getStepDurationMs(state.animationResolution) / 30
         const id = setInterval(() => {
             setState((prev) => {
-                const next = prev.animationStep + 1
-                if (next > maxDataPoints) {
+                const next = prev.animationTime + step
+                if (next > chartBounds.end) {
                     return { ...prev, animationPlaying: false }
                 }
-                return { ...prev, animationStep: next }
+                return { ...prev, animationTime: next }
             })
-        }, 500)
+        }, 1000 / 30)
         return () => clearInterval(id)
-    }, [state.animationPlaying, maxDataPoints])
+    }, [state.animationPlaying, chartBounds, state.animationResolution, getStepDurationMs])
 
     const fetchReposData = React.useCallback(
         async (repos: string[], chartMode?: ChartMode) => {
@@ -125,7 +147,7 @@ function StarChartViewer() {
                 setState((prevState) => ({
                     ...prevState,
                     chartData: convertDataToChartData(repoData, chartMode ?? state.chartMode),
-                    animationStep: 0
+                    animationTime: 0
                 }))
             }
         },
@@ -313,7 +335,7 @@ function StarChartViewer() {
 
     const handlePlayAnimation = () => {
         if (state.chartData) {
-            setState((prev) => ({ ...prev, animationPlaying: true, animationStep: 0 }))
+            setState((prev) => ({ ...prev, animationPlaying: true, animationTime: chartBounds.start }))
         }
     }
 
@@ -347,9 +369,10 @@ function StarChartViewer() {
             if (e.data.size > 0) chunks.push(e.data)
         }
         recorder.start()
-        for (let step = 1; step <= maxDataPoints; step++) {
-            setState((prev) => ({ ...prev, animationStep: step }))
-            await new Promise((r) => setTimeout(r, 100))
+        const step = getStepDurationMs(state.animationResolution) / 30
+        for (let t = chartBounds.start; t <= chartBounds.end; t += step) {
+            setState((prev) => ({ ...prev, animationTime: t }))
+            await new Promise((r) => setTimeout(r, 1000 / 30))
             const svgString = new XMLSerializer().serializeToString(svgElement)
             const v = await Canvg.fromString(ctx, svgString)
             ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -408,7 +431,7 @@ function StarChartViewer() {
                         </div>
                     </div>
                 )}
-                <div id="capture">{state.chartData && state.chartData.datasets.length > 0 && <StarXYChart classname="w-full h-auto mt-4" data={state.chartData} chartMode={state.chartMode} animationStep={state.animationStep} />}</div>
+                <div id="capture">{state.chartData && state.chartData.datasets.length > 0 && <StarXYChart classname="w-full h-auto mt-4" data={state.chartData} chartMode={state.chartMode} animationTime={state.animationTime} />}</div>
                 {/* ... rest of the JSX here */}
                 {state.showSetTokenDialog && (
                     <TokenSettingDialog
@@ -442,6 +465,17 @@ function StarChartViewer() {
                             <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handleGenerateCSVBtnClick}>
                                 <i className="fas fa-download"></i> CSV
                             </button>
+
+                            <select
+                                className="ml-2 mb-2 rounded leading-9 text-sm px-2 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200"
+                                value={state.animationResolution}
+                                onChange={(e) => setState((p) => ({ ...p, animationResolution: e.target.value as any }))}
+                            >
+                                <option value="Daily">Daily</option>
+                                <option value="Weekly">Weekly</option>
+                                <option value="Monthly">Monthly</option>
+                                <option value="Yearly">Yearly</option>
+                            </select>
 
                             <button className="ml-2 mb-2 rounded leading-9 text-sm px-3 cursor-pointer border text-dark bg-gray-100 hover:bg-gray-200" onClick={handlePlayAnimation}>
                                 <i className="fas fa-play"></i> Play
