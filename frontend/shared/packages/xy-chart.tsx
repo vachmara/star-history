@@ -96,7 +96,8 @@ const getDarkThemeDefaultOptions = (transparent: boolean): XYChartOptions => {
 const XYChart = (
     svg: SVGSVGElement,
     { title, xLabel, yLabel, data: { datasets }, showDots, theme, transparent }: XYChartConfig,
-    initialOptions: Partial<XYChartOptions>
+    initialOptions: Partial<XYChartOptions>,
+    animationStep?: number
 ) => {
     const options: XYChartOptions = {
         ...(theme === "dark" ? getDarkThemeDefaultOptions(transparent) : getDefaultOptions(transparent)),
@@ -114,7 +115,12 @@ const XYChart = (
     }
 
     const data = {
-        datasets
+        datasets: animationStep !== undefined
+            ? datasets.map((ds) => ({
+                  ...ds,
+                  data: ds.data.slice(0, animationStep)
+              }))
+            : datasets
     }
 
     const filter = "url(#xkcdify)"
